@@ -1,0 +1,368 @@
+import React, { useState } from 'react';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Select } from '@/components/ui/select';
+import { Copy, Clipboard } from 'lucide-react';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+
+// Bluebook Rules
+const BLUEBOOK_RULES = {
+  '10.2.1': {
+    name: 'Case Names in Citations',
+    subrules: {
+      'a': 'Abbreviate party names',
+      'b': 'Include "In re" and "Ex parte"',
+      'c': 'Abbreviate business designations',
+      'd': 'Remove "The" at start',
+      'e': 'Include descriptive terms',
+      'f': 'Abbreviate geographical terms'
+    }
+  },
+  '10.3': {
+    name: 'Reporters and Court Parenthetical',
+    subrules: {
+      'a': 'Use proper reporter abbreviations',
+      'b': 'Include court identifier in parenthetical'
+    }
+  },
+  '10.7': {
+    name: 'Subsequent History',
+    subrules: {
+      'a': 'Include relevant history',
+      'b': 'Include cert. denied if recent',
+      'c': 'Include significant remand history'
+    }
+  }
+};
+
+// Federal reporters with proper abbreviations
+const FEDERAL_REPORTERS = {
+  'U.S.': {
+    name: 'United States Reports',
+    pattern: /(\d+)\s+U\.?\s*S\.?\s+(\d+)/i
+  },
+  'S. Ct.': {
+    name: 'Supreme Court Reporter',
+    pattern: /(\d+)\s+S\.?\s*Ct\.?\s+(\d+)/i
+  },
+  'L. Ed.': {
+    name: 'Lawyers Edition',
+    pattern: /(\d+)\s+L\.?\s*Ed\.?\s+(\d+)/i
+  },
+  'F.': {
+    name: 'Federal Reporter',
+    pattern: /(\d+)\s+F\.?\s+(\d+)/i
+  },
+  'F.2d': {
+    name: 'Federal Reporter Second Series',
+    pattern: /(\d+)\s+F\.?2d\s+(\d+)/i
+  },
+  'F.3d': {
+    name: 'Federal Reporter Third Series',
+    pattern: /(\d+)\s+F\.?3d\s+(\d+)/i
+  },
+  'F. Supp.': {
+    name: 'Federal Supplement',
+    pattern: /(\d+)\s+F\.?\s*Supp\.?\s+(\d+)/i
+  },
+  'F. Supp. 2d': {
+    name: 'Federal Supplement Second Series',
+    pattern: /(\d+)\s+F\.?\s*Supp\.?\s*2d\s+(\d+)/i
+  }
+};
+
+const FederalCitationGenerator = () => {
+  // State for parsed and manual input
+  const [input, setInput] = useState({
+    rawText: '',
+    parsedComponents: {
+      partyOne: '',
+      partyTwo: '',
+      volume: '',
+      reporter: '',
+      page: '',
+      court: '',
+      year: '',
+      pinpoint: '',
+      subsequentHistory: []
+    }
+  });
+
+  // State for active rules
+  const [activeRules, setActiveRules] = useState({});
+  const [generatedCitation, setGeneratedCitation] = useState('');
+
+  // Parse citation text
+  const parseCitation = (text) => {
+    try {
+      const components = {
+        partyOne: '',
+        partyTwo: '',
+        volume: '',
+        reporter: '',
+        page: '',
+        court: '',
+        year: '',
+        pinpoint: '',
+        subsequentHistory: []
+      };
+
+      // Extract case name
+      const caseNameMatch = text.match(/^(.*?)(?=,|\d+\s*[A-Z])/);
+      if (caseNameMatch) {
+        const caseName = caseNameMatch[1].trim();
+        const parties = caseName.split(/\sv\.?\s/);
+        if (parties.length >= 2) {
+          components.partyOne = parties[0].trim();
+          components.partyTwo = parties[1].trim();
+        }
+      }
+
+      // Extract reporter citation
+      Object.entries(FEDERAL_REPORTERS).forEach(([abbr, { pattern }]) => {
+        const match = text.match(pattern);
+        if (match) {
+          components.volume = match[1];
+          components.reporter = abbr;
+          components.page = match[2];
+        }
+      });
+
+      // Extract court and year
+      const courtYearMatch = text.match(/\((.*?)(\d{4})\)/);
+      if (courtYearMatch) {
+        components.court = courtYearMatch[1].trim();
+        components.year = courtYearMatch[2];
+      }
+
+      // Extract pinpoint
+      const pinpointMatch = text.match(/,\s*(\d+)(?=\s*\(|\s*$)/);
+      if (pinpointMatch) {
+        components.pinpoint = pinpointMatch[1];
+      }
+
+      // Extract subsequent history
+      const historyMatch = text.match(/,\s*((?:aff\'d|rev\'d|cert\. denied).*?)(?=\s*\(|\s*$)/i);
+      if (historyMatch) {
+        components.subsequentHistory.push(historyMatch[1].trim());
+      }
+
+      setInput(prev => ({
+        ...prev,
+        parsedComponents: components
+      }));
+    } catch (error) {
+      console.error('Error parsing citation:', error);
+    }
+  };
+
+  // Format case name based on active rules
+  const formatCaseName = (partyOne, partyTwo) => {
+    if (!partyOne || !partyTwo) return '';
+
+    let name = `${partyOne} v. ${partyTwo}`;
+
+    if (activeRules['10.2.1.d']) {
+      name = name.replace(/^The\s+/i, '');
+    }
+
+    if (activeRules['10.2.1.c']) {
+      name = name
+        .replace(/Corporation/gi, 'Corp.')
+        .replace(/Incorporated/gi, 'Inc.')
+        .replace(/Limited/gi, 'Ltd.')
+        .replace(/Company/gi, 'Co.');
+    }
+
+    return name;
+  };
+
+  // Generate citation based on components and active rules
+  const generateCitation = () => {
+    const components = input.parsedComponents;
+    let citation = '';
+
+    // Case name
+    const caseName = formatCaseName(components.partyOne, components.partyTwo);
+    if (caseName) {
+      citation += caseName;
+    }
+
+    // Reporter citation
+    if (components.volume && components.reporter && components.page) {
+      citation += `, ${components.volume} ${components.reporter} ${components.page}`;
+    }
+
+    // Pinpoint
+    if (components.pinpoint) {
+      citation += `, ${components.pinpoint}`;
+    }
+
+    // Court and year
+    if (components.court || components.year) {
+      citation += ' (';
+      if (components.court) citation += components.court;
+      if (components.court && components.year) citation += ' ';
+      if (components.year) citation += components.year;
+      citation += ')';
+    }
+
+    // Subsequent history if Rule 10.7 is active
+    if (activeRules['10.7'] && components.subsequentHistory.length > 0) {
+      citation += `, ${components.subsequentHistory.join(', ')}`;
+    }
+
+    setGeneratedCitation(citation);
+  };
+
+  return (
+    <div className="max-w-4xl mx-auto p-6">
+      <Card className="w-full">
+        <CardHeader>
+          <CardTitle className="text-2xl font-bold">Federal Citation Generator</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Tabs defaultValue="parse">
+            <TabsList>
+              <TabsTrigger value="parse">Parse Citation</TabsTrigger>
+              <TabsTrigger value="rules">Rules</TabsTrigger>
+              <TabsTrigger value="preview">Preview</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="parse" className="space-y-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Paste Citation</label>
+                <Textarea
+                  value={input.rawText}
+                  onChange={(e) => {
+                    setInput(prev => ({ ...prev, rawText: e.target.value }));
+                    parseCitation(e.target.value);
+                  }}
+                  placeholder="Paste citation here..."
+                  className="min-h-[100px]"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">First Party</label>
+                  <Input
+                    value={input.parsedComponents.partyOne}
+                    readOnly
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Second Party</label>
+                  <Input
+                    value={input.parsedComponents.partyTwo}
+                    readOnly
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Volume</label>
+                  <Input
+                    value={input.parsedComponents.volume}
+                    readOnly
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Reporter</label>
+                  <Input
+                    value={input.parsedComponents.reporter}
+                    readOnly
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Page</label>
+                  <Input
+                    value={input.parsedComponents.page}
+                    readOnly
+                  />
+                </div>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="rules" className="space-y-4">
+              {Object.entries(BLUEBOOK_RULES).map(([ruleId, rule]) => (
+                <div key={ruleId} className="space-y-2 border p-4 rounded-lg">
+                  <div className="flex items-center space-x-2">
+                    <Checkbox
+                      id={ruleId}
+                      checked={activeRules[ruleId]}
+                      onCheckedChange={(checked) => {
+                        setActiveRules(prev => ({
+                          ...prev,
+                          [ruleId]: checked
+                        }));
+                      }}
+                    />
+                    <label htmlFor={ruleId} className="text-sm font-medium">
+                      Rule {ruleId}: {rule.name}
+                    </label>
+                  </div>
+                  <div className="pl-6 space-y-1">
+                    {Object.entries(rule.subrules).map(([subId, description]) => (
+                      <div key={`${ruleId}.${subId}`} className="flex items-center space-x-2">
+                        <Checkbox
+                          id={`${ruleId}.${subId}`}
+                          checked={activeRules[`${ruleId}.${subId}`]}
+                          onCheckedChange={(checked) => {
+                            setActiveRules(prev => ({
+                              ...prev,
+                              [`${ruleId}.${subId}`]: checked
+                            }));
+                          }}
+                        />
+                        <label htmlFor={`${ruleId}.${subId}`} className="text-sm">
+                          ({subId}) {description}
+                        </label>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </TabsContent>
+
+            <TabsContent value="preview">
+              <Button 
+                onClick={generateCitation}
+                className="w-full bg-green-900 hover:bg-green-800 text-white"
+              >
+                Generate Citation
+              </Button>
+            </TabsContent>
+          </Tabs>
+        </CardContent>
+      </Card>
+
+      {generatedCitation && (
+        <Card className="mt-6">
+          <CardHeader>
+            <CardTitle>Generated Citation</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="p-4 bg-gray-50 rounded-lg font-serif">
+              {generatedCitation}
+            </div>
+            <Button 
+              variant="outline" 
+              className="mt-4 flex items-center gap-2"
+              onClick={() => navigator.clipboard.writeText(generatedCitation)}
+            >
+              <Copy size={16} />
+              Copy Citation
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+};
+
+export default FederalCitationGenerator;
